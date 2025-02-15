@@ -1,0 +1,169 @@
+
+#include <IRremote.hpp>  // Include the IRremote library
+
+#define IR_TRANSMITTER_PIN 3  // IR Transmitter pin
+#define TRIG_PIN 4            // Ultrasonic sensor trigger pin
+#define ECHO_PIN 7           // Ultrasonic sensor echo pin
+#define BUZZER_PIN 12         // Buzzer pin
+
+#define DISTANCE_THRESHOLD 12  // Distance to detect car (in cm)
+#define TOTAL_SLOTS 4      // Total parking slots
+#include <Servo.h>
+
+#define SLOT1_PIN A0  // Analog output pin for Slot 1
+#define SLOT2_PIN A1  // Analog output pin for Slot 2
+#define SLOT3_PIN A2  // Analog output pin for Slot 3
+#define SLOT4_PIN A3  // Analog output pin for Slot 4
+
+#define SLOT1_BOOK_PIN 5   // GPIO2 for Slot 1 booking signal
+#define SLOT2_BOOK_PIN 6   // GPIO3 for Slot 2 booking signal
+#define SLOT3_BOOK_PIN 10   // GPIO4 for Slot 3 booking signal
+#define SLOT4_BOOK_PIN 11   // GPIO5 for Slot 4 booking signal
+Servo myservo;
+bool parkingSlots[TOTAL_SLOTS] = {false, false, false, false}; // False means free slot
+
+void setup() {
+    Serial.begin(9600);
+    pinMode(TRIG_PIN, OUTPUT);
+    pinMode(ECHO_PIN, INPUT);
+    pinMode(BUZZER_PIN, OUTPUT);
+    myservo.attach(9);  // Attach the servo
+    myservo.write(115);
+    IrSender.begin(IR_TRANSMITTER_PIN);  // Initialize IR transmitter
+
+    Serial.println("Smart Parking System Ready!");
+    pinMode(SLOT1_PIN, OUTPUT);
+    pinMode(SLOT2_PIN, OUTPUT);
+    pinMode(SLOT3_PIN, OUTPUT);
+    pinMode(SLOT4_PIN, OUTPUT);
+
+    pinMode(SLOT1_BOOK_PIN, INPUT);
+    pinMode(SLOT2_BOOK_PIN, INPUT);
+    pinMode(SLOT3_BOOK_PIN, INPUT);
+    pinMode(SLOT4_BOOK_PIN, INPUT);
+}
+
+void loop() {
+    float distance = getUltrasonicDistance();  // Measure distance
+    checkPreBooking();
+    Serial.println(distance);
+    if (distance > 0 && distance < DISTANCE_THRESHOLD) {  // If car detected
+        Serial.println("Car detected at the entrance!");
+
+        int allocatedSlot = findAvailableSlot(); // Find a free parking slot
+
+        if (allocatedSlot != -1) { // If slot found
+            Serial.print("Allocating Slot: ");
+            Serial.println(allocatedSlot + 1);
+            
+            sendIRSignal(allocatedSlot + 1); // Send slot number via IR
+            beepBuzzer(allocatedSlot + 1);  // Beep buzzer for confirmation
+            parkingSlots[allocatedSlot] = true; // Mark slot as occupied
+
+            // Add analog signal to ESP board (simulating parking slot status)
+            analogWrite(SLOT1_PIN, parkingSlots[0] ? 255 : 0);  // Slot 1 (full or empty)
+            analogWrite(SLOT2_PIN, parkingSlots[1] ? 255 : 0);  // Slot 2 (full or empty)
+            analogWrite(SLOT3_PIN, parkingSlots[2] ? 255 : 0);  // Slot 3 (full or empty)
+            analogWrite(SLOT4_PIN, parkingSlots[3] ? 255 : 0);  // Slot 4 (full or empty)
+            
+            // Move the servo to simulate the entry of the car
+            for (int pos = 100; pos >= 10; pos--) {
+                myservo.write(pos);
+                delay(15);
+            }
+            delay(1000);
+            for (int pos = 10; pos <= 100; pos++) {
+                myservo.write(pos);
+                delay(15);
+            }
+        } else { // If no slots are available
+            Serial.println("Parking Full! Cannot allocate a slot.");
+            beepBuzzer(5); // Beep continuously for 10 seconds
+        }
+
+        delay(3000); // Wait to avoid multiple detections
+    }
+    delay(1000);
+}
+
+//Check for pre booking
+void checkPreBooking() {
+  // Check if a booking signal is received for each slot
+  if (digitalRead(SLOT1_BOOK_PIN) == HIGH) {
+    // book the slot one as it not produce anyone
+    Serial.println("Slot 1 booked!");
+    delay(1000);  // Debounce
+  }
+
+  if (digitalRead(SLOT2_BOOK_PIN) == HIGH) {
+    Serial.println("Slot 2 booked!");
+    delay(1000);  // Debounce
+  }
+
+  if (digitalRead(SLOT3_BOOK_PIN) == HIGH) {
+    Serial.println("Slot 3 booked!");
+    delay(1000);  // Debounce
+  }
+
+  if (digitalRead(SLOT4_BOOK_PIN) == HIGH) {
+    Serial.println("Slot 4 booked!");
+    delay(1000);  // Debounce
+  }
+}
+
+// Function to measure distance using ultrasonic sensor
+float getUltrasonicDistance() {
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(2);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(TRIG_PIN, LOW);
+
+    long duration = pulseIn(ECHO_PIN, HIGH);
+    float distance = duration * 0.0343 / 2; // Convert time to distance in cm
+    return distance;
+}
+
+// Function to find an available parking slot
+int findAvailableSlot() {
+    for (int i = 0; i < TOTAL_SLOTS; i++) {
+        if (!parkingSlots[i]) {  // Check if slot is free
+            return i;  // Return the available slot index
+        }
+    }
+    return -1; // Return -1 if no slots are available
+}
+
+// Function to send IR signal
+void sendIRSignal(int slot) {
+    uint8_t signal;
+    switch (slot) {
+        case 1: signal = 0x10; break;
+        case 2: signal = 0x20; break;
+        case 3: signal = 0x30; break;
+        case 4: signal = 0x40; break;
+        default: return;
+    }
+    IrSender.sendNEC(0x00FF, signal, 0);
+    Serial.println("IR Signal Sent!");
+}
+
+// Function to beep buzzer
+void beepBuzzer(int times) {
+    Serial.print("Buzzer Beeping ");
+    Serial.print(times);
+    Serial.println(" times");
+
+    for (int i = 0; i < times; i++) {
+        digitalWrite(BUZZER_PIN, HIGH);
+        delay(200);
+        digitalWrite(BUZZER_PIN, LOW);
+        delay(200);
+    }
+
+    if (times == 10) {  // If parking is full, beep continuously for 10 seconds
+        digitalWrite(BUZZER_PIN, HIGH);
+        delay(10000);
+        digitalWrite(BUZZER_PIN, LOW);
+    }
+}
